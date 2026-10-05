@@ -46,6 +46,9 @@ services:
       # same-origin, so the browser never issues a cross-origin API request.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       API_KEY: ${API_KEY:-}
+      # true = callers without a key are read-only viewers; set it before
+      # sharing the UI through a public tunnel.
+      PUBLIC_READ: ${PUBLIC_READ:-false}
 
       # --- observability: JSON logs for a container ---
       LOG_FORMAT: json

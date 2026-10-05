@@ -115,23 +115,24 @@ jobs:
         with:
           context: .
           file: backend/Dockerfile
-          tags: compliance-copilot-api:ci
+          # The tag docker-compose.yml names, so `up --no-build` below runs this exact image.
+          tags: compliance-copilot-api:latest
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
 
       - name: Build frontend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: frontend/Dockerfile
-          tags: compliance-copilot-ui:ci
+          tags: compliance-copilot-ui:latest
           load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=ui
+          cache-to: type=gha,mode=max,scope=ui
 
       - name: Report image sizes
-        run: docker image ls compliance-copilot-api:ci compliance-copilot-ui:ci
+        run: docker image ls --filter reference='compliance-copilot-*'
 
       - name: Start the stack
         # No GROQ_API_KEY in CI: retrieval, ingestion and every read endpoint work
