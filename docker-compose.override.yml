@@ -1,0 +1,48 @@
+# =============================================================================
+# Development overrides — applied automatically by `docker compose up`.
+#
+# Use `docker compose -f docker-compose.yml up` to run the production shape
+# without these.
+#
+# What changes: the backend source is bind-mounted and reloads on edit, and the
+# frontend runs Vite's dev server with HMR instead of nginx. Note that this
+# means the dev stack does NOT exercise the nginx SSE configuration — test
+# streaming against the production shape before deploying.
+# =============================================================================
+
+services:
+  backend:
+    environment:
+      LOG_FORMAT: console       # readable in a terminal rather than JSON
+      LOG_LEVEL: DEBUG          # includes per-retrieval diagnostics
+    volumes:
+      - app-data:/app/data
+      # Source bind-mounts for reload. Models stay baked in the image, so a
+      # restart is seconds rather than a re-download.
+      - ./backend:/app/backend:ro
+      - ./eval:/app/eval:ro
+      - ./main.py:/app/main.py:ro
+      - ./policies:/app/policies:ro
+      - ./fixtures:/app/fixtures:ro
+    command: ["python", "/app/main.py", "serve", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  frontend:
+    # Its own tag: the dev build stops at the Node stage, and tagging that as
+    # :latest would overwrite the nginx image the production shape runs.
+    image: compliance-copilot-ui:dev
+    build:
+      # Stop at the builder stage: it has Node and the installed dependencies.
+      target: builder
+    command: npm run dev -- --host 0.0.0.0 --port 80
+    environment:
+      # Vite proxies /api to this target in development.
+      VITE_API_PROXY_TARGET: http://backend:8000
+    volumes:
+      # Mount sources but keep the image's node_modules — a host node_modules
+      # built on Windows would contain the wrong native bindings for Alpine.
+      - ./frontend/src:/app/src:ro
+      - ./frontend/index.html:/app/index.html:ro
+      - ./frontend/vite.config.ts:/app/vite.config.ts:ro
+      - ./frontend/tsconfig.json:/app/tsconfig.json:ro
+      - ./frontend/tsconfig.app.json:/app/tsconfig.app.json:ro
+      - ./frontend/tsconfig.node.json:/app/tsconfig.node.json:ro

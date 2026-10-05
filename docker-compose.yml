@@ -1,0 +1,92 @@
+# =============================================================================
+# Compliance Intelligence Copilot — local stack
+#
+#   cp .env.example .env     # then set GROQ_API_KEY
+#   docker compose up --build
+#   open http://localhost:3000
+#
+# Two services only. There is deliberately no database, cache or worker
+# container: the registry is SQLite on a volume (README DR-8), there is nothing
+# to cache across processes, and indexing takes seconds so FastAPI's
+# BackgroundTasks plus a status column covers it without a broker.
+#
+# The consequence, stated plainly: this is a STATEFUL SINGLE-REPLICA service.
+# FAISS, SQLite and the uploaded originals all live on one volume, so scaling
+# `backend` to two replicas would corrupt state. That constraint is the honest
+# trade for having no infrastructure, and the migration path (Qdrant + Postgres
+# behind the existing interfaces) is documented in the README.
+# =============================================================================
+
+name: compliance-copilot
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: compliance-copilot-api:latest
+    restart: unless-stopped
+    environment:
+      # --- LLM: supplied from .env, never baked into the image ---
+      LLM_PROVIDER: ${LLM_PROVIDER:-groq}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      # host.docker.internal lets the container reach an Ollama running on the
+      # host, which is what makes the fully-offline path work from Docker.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b-instruct}
+
+      # --- retrieval: defaults are the measured configuration ---
+      RETRIEVAL_TOP_K: ${RETRIEVAL_TOP_K:-5}
+      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      RERANK_TOP_N: ${RERANK_TOP_N:-10}
+
+      # --- security ---
+      # nginx is the only origin that reaches the API, and it proxies
+      # same-origin, so the browser never issues a cross-origin API request.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      API_KEY: ${API_KEY:-}
+
+      # --- observability: JSON logs for a container ---
+      LOG_FORMAT: json
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # --- first-boot seeding ---
+      SEED_CORPUS: ${SEED_CORPUS:-true}
+    volumes:
+      # Named volume, not a bind mount: the container runs as a non-root user and
+      # a fresh named volume inherits the image's /app/data ownership, which a
+      # host bind mount would not.
+      - app-data:/app/data
+    extra_hosts:
+      # Required on Linux for host.docker.internal to resolve (a no-op on
+      # Docker Desktop, where it already does).
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8000"
+    ports:
+      # Published so /docs and the CLI are reachable directly. Remove this
+      # mapping to expose only the UI.
+      - "${API_PORT:-8000}:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    image: compliance-copilot-ui:latest
+    restart: unless-stopped
+    depends_on:
+      backend:
+        # Waits for the liveness healthcheck, which passes once the app has
+        # started and warmed its models. The UI still handles a cold backend
+        # gracefully, so this is politeness rather than a requirement.
+        condition: service_healthy
+    ports:
+      - "${UI_PORT:-3000}:80"
+
+volumes:
+  app-data:
+    # Holds app.db, the FAISS index, uploaded originals and audit.log.
+    # `docker compose down` keeps it; `down -v` destroys the corpus and the
+    # audit trail, which is why that is never the documented default.
+    name: compliance-copilot-data

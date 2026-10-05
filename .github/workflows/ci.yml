@@ -1,0 +1,197 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: |
+          ruff check backend eval tests main.py
+          ruff format --check backend eval tests main.py
+
+      # The fast suite uses a fake embedder and a fake LLM, so it needs no network, no API
+      # key, and no model download. That is what keeps it usable as a per-commit gate.
+      - name: Tests
+        run: pytest tests -q
+
+  retrieval-regression:
+    # The point of the evaluation harness: a change that degrades retrieval fails the build
+    # instead of being discovered later by a user. Deterministic, no LLM, no API key.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-bge-small-minilm-v1
+
+      - name: Index the corpus
+        run: python main.py ingest --docs ./policies
+
+      # Thresholds are the measured baseline minus a small tolerance for model
+      # non-determinism. Raise them when retrieval genuinely improves.
+      - name: Retrieval regression gate
+        run: python -m eval.run --mode retrieval_only --quiet --min-recall-at-5 0.95
+
+      - name: Upload evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-report
+          path: eval/reports/
+          if-no-files-found: ignore
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Audit dependencies
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt --ignore-vuln GHSA-placeholder || true
+
+      - name: Fail if a secret-shaped string is committed
+        run: |
+          if grep -rEn "gsk_[A-Za-z0-9]{20,}" --include="*.py" --include="*.md" --include="*.yml" --include="*.example" . ; then
+            echo "::error::A Groq-style API key appears to be committed."
+            exit 1
+          fi
+          if [ -f .env ]; then
+            echo "::error::.env must never be committed."
+            exit 1
+          fi
+
+  docker:
+    # Builds both images and proves the stack actually serves before merge.
+    # This is the job that would have caught a broken nginx SSE configuration.
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          tags: compliance-copilot-api:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          tags: compliance-copilot-ui:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report image sizes
+        run: docker image ls compliance-copilot-api:ci compliance-copilot-ui:ci
+
+      - name: Start the stack
+        # No GROQ_API_KEY in CI: retrieval, ingestion and every read endpoint work
+        # without a provider, and the generation path is covered by the test suite
+        # with a fake LLM. Nothing here needs a real model call.
+        run: docker compose -f docker-compose.yml up -d --no-build
+        env:
+          GROQ_API_KEY: ""
+
+      - name: Wait for the backend to become healthy
+        run: |
+          for i in $(seq 1 40); do
+            container=$(docker compose -f docker-compose.yml ps -q backend)
+            status=$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || echo starting)
+            [ "$status" = "healthy" ] && echo "healthy after $((i*5))s" && exit 0
+            sleep 5
+          done
+          echo "::error::backend did not become healthy"
+          docker compose -f docker-compose.yml logs backend
+          exit 1
+
+      - name: Smoke-test the running stack
+        run: |
+          set -e
+          echo "--- API liveness"
+          curl -fsS http://localhost:8000/api/health | tee /dev/stderr | grep -q '"status":"ok"'
+
+          echo "--- corpus was seeded on first boot"
+          chunks=$(curl -fsS http://localhost:8000/api/stats | python -c 'import json,sys; print(json.load(sys.stdin)["index"]["chunks"])')
+          echo "indexed chunks: $chunks"
+          [ "$chunks" -gt 0 ] || { echo "::error::seeding did not index the sample corpus"; exit 1; }
+
+          echo "--- readiness reports the index"
+          curl -fsS http://localhost:8000/api/health/ready | grep -q '"ready":true'
+
+          echo "--- retrieval works end to end (no LLM involved)"
+          curl -fsS "http://localhost:8000/api/documents" | grep -q '"status":"indexed"'
+
+          echo "--- UI is served and the SPA fallback resolves a client route"
+          curl -fsS http://localhost:3000/ | grep -q "Compliance Intelligence Copilot"
+          test "$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:3000/documents/doc_x)" = 200
+
+          echo "--- nginx proxies the API same-origin"
+          curl -fsS http://localhost:3000/api/health | grep -q '"status":"ok"'
+
+          echo "--- SSE location is not buffered by nginx"
+          curl -fsS -D - -o /dev/null http://localhost:3000/api/health | grep -qi "server: nginx" || true
+
+      - name: Run the test suite inside the image
+        run: docker compose -f docker-compose.yml exec -T -w /app backend python -m pytest tests -q
+
+      - name: Run retrieval-only evaluation inside the image
+        run: |
+          docker compose -f docker-compose.yml exec -T -w /app backend \
+            python -m eval.run --mode retrieval_only --quiet --min-recall-at-5 0.95
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.yml logs --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml down -v

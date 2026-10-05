@@ -1,0 +1,49 @@
+[project]
+name = "compliance-intelligence-copilot"
+version = "0.2.0"
+description = "RAG platform for AML/KYC compliance documents with grounded, citation-backed answers."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["backend", "."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: requires real models (embedder / reranker) — excluded from the fast suite",
+    "live: requires a live LLM provider and network",
+]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+exclude = [".venv", "data", "frontend", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "B008",    # FastAPI's Depends()/File() in defaults is the documented idiom
+    "RUF012",  # ClassVar annotations not required for our constant lists
+    "RUF001",  # typographic punctuation (— § –) is deliberate in prose and citation labels
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501", "B017"]  # long fixture text; deliberate broad raises in validation tests
+# Prompt text and regex patterns are data, not code layout: reflowing them to satisfy a line
+# limit would change what is sent to the model, or make the patterns harder to read.
+"backend/app/rag/prompts.py" = ["E501"]
+"backend/app/ingestion/injection.py" = ["E501"]
+"backend/app/rag/guardrails.py" = ["E501"]
+"eval/judges.py" = ["E501"]
+# The document generator is mostly long prose strings; reflowing them to a column limit
+# would make the content harder to read and edit, not easier.
+"scripts/generate_project_doc*.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+ignore_missing_imports = true
+files = ["backend/app", "eval"]
