@@ -142,16 +142,23 @@ jobs:
         env:
           GROQ_API_KEY: ""
 
-      - name: Wait for the backend to become healthy
+      # Both services, not just the backend: `up -d` returns the moment nginx is
+      # started, a second or so before it accepts connections, and a smoke test
+      # fired into that gap fails with "connection reset by peer".
+      - name: Wait for both services to become healthy
         run: |
           for i in $(seq 1 40); do
-            container=$(docker compose -f docker-compose.yml ps -q backend)
-            status=$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || echo starting)
-            [ "$status" = "healthy" ] && echo "healthy after $((i*5))s" && exit 0
+            pending=""
+            for service in backend frontend; do
+              container=$(docker compose -f docker-compose.yml ps -q "$service")
+              status=$(docker inspect --format '{{.State.Health.Status}}' "$container" 2>/dev/null || echo starting)
+              [ "$status" = "healthy" ] || pending="$pending $service=$status"
+            done
+            [ -z "$pending" ] && echo "stack healthy" && exit 0
             sleep 5
           done
-          echo "::error::backend did not become healthy"
-          docker compose -f docker-compose.yml logs backend
+          echo "::error::stack did not become healthy:$pending"
+          docker compose -f docker-compose.yml logs
           exit 1
 
       - name: Smoke-test the running stack
