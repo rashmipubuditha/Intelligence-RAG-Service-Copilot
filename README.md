@@ -269,27 +269,6 @@ Production identity (SSO/OIDC), per-document access control and immutable audit 
 
 ---
 
-## Roadmap
-
-- Permanent hosting (currently demoed through a temporary tunnel)
-- Query decomposition for complex multi-document questions
-- A larger evaluation set with multiple annotators
-- SSO and per-document permissions
-- Playwright end-to-end tests
-
----
-
-## Documentation
-
-| Document | Contents |
-|---|---|
-| [`READMEmy.md`](READMEmy.md) | The complete project guide: business case, build story, every design decision, all measurements, risks, and interview preparation |
-| `Compliance_Intelligence_Copilot_Technical_Reference.docx` | Long-form technical reference: every module explained, worked examples, decision records, ~70 Q&A, glossary |
-| [`docs/conflict-detection-demo.md`](docs/conflict-detection-demo.md) | How to reproduce conflicting-version detection |
-| `/docs` (running server) | Interactive API reference |
-
----
-
 <div align="center">
 <sub>Built by Rashmi Pubuditha · Answers reflect the indexed documents and are not legal advice.</sub>
 </div>
