@@ -203,6 +203,11 @@ def settings(tmp_path: Path) -> Settings:
         retrieval_top_k=3,
         retrieval_candidate_pool=10,
         api_key=None,
+        # Pinned so a developer's own .env (e.g. PUBLIC_READ=true for a demo) cannot
+        # change what the suite tests.
+        public_read=False,
+        frame_ancestors=None,
+        static_dir=None,
         log_level="WARNING",
         evidence_refusal_floor=0.0,  # fake embedder scores differ from BGE; gate tested directly
     )
