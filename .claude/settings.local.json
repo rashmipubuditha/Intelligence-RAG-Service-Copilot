@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(.venv/Scripts/python.exe -m pip install --quiet \"fastapi>=0.115\" \"uvicorn[standard]>=0.32\" python-multipart pypdf python-docx structlog pytest pytest-asyncio ruff 2>&1 | tail -5; echo \"EXIT:$?\")",
-      "Bash(.venv/Scripts/python.exe -m pip list)"
-    ]
-  }
-}
